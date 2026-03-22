@@ -9,10 +9,10 @@ from colorama import Fore, Style, init
 import questionary
 
 from .engine import BacktestEngine
-from src.llm.models import LLM_ORDER, OLLAMA_LLM_ORDER, get_model_info, ModelProvider
+from src.llm.models import LLM_ORDER, OLLAMA_LLM_ORDER, OLLAMA_CLOUD_LLM_ORDER, get_model_info, ModelProvider
 from src.utils.analysts import ANALYST_ORDER
 from src.main import run_hedge_fund
-from src.utils.ollama import ensure_ollama_and_model
+from src.utils.ollama import ensure_ollama_and_model, ensure_ollama_server_for_cloud_model
 
 
 def main() -> int:
@@ -35,6 +35,7 @@ def main() -> int:
     parser.add_argument("--analysts", type=str, required=False)
     parser.add_argument("--analysts-all", action="store_true")
     parser.add_argument("--ollama", action="store_true")
+    parser.add_argument("--ollama-cloud", action="store_true")
 
     args = parser.parse_args()
     init(autoreset=True)
@@ -72,6 +73,10 @@ def main() -> int:
         )
 
     # Model selection simplified: default to first ordered model or Ollama flag
+    if args.ollama and args.ollama_cloud:
+        print(f"{Fore.RED}Please use either --ollama or --ollama-cloud, not both.{Style.RESET_ALL}")
+        return 1
+
     if args.ollama:
         print(f"{Fore.CYAN}Using Ollama for local LLM inference.{Style.RESET_ALL}")
         model_name = questionary.select(
@@ -100,6 +105,35 @@ def main() -> int:
         model_provider = ModelProvider.OLLAMA.value
         print(
             f"\nSelected {Fore.CYAN}Ollama{Style.RESET_ALL} model: {Fore.GREEN + Style.BRIGHT}{model_name}{Style.RESET_ALL}\n"
+        )
+    elif args.ollama_cloud:
+        print(f"{Fore.CYAN}Using Ollama cloud models through your local signed-in Ollama instance.{Style.RESET_ALL}")
+        model_name = questionary.select(
+            "Select your Ollama cloud model:",
+            choices=[questionary.Choice(display, value=value) for display, value, _ in OLLAMA_CLOUD_LLM_ORDER],
+            style=questionary.Style(
+                [
+                    ("selected", "fg:green bold"),
+                    ("pointer", "fg:green bold"),
+                    ("highlighted", "fg:green"),
+                    ("answer", "fg:green bold"),
+                ]
+            ),
+        ).ask()
+        if not model_name:
+            print("\n\nInterrupt received. Exiting...")
+            return 1
+        if model_name == "-":
+            model_name = questionary.text("Enter the Ollama cloud model name (for example, gpt-oss:120b-cloud):").ask()
+            if not model_name:
+                print("\n\nInterrupt received. Exiting...")
+                return 1
+        if not ensure_ollama_server_for_cloud_model(model_name):
+            print(f"{Fore.RED}Cannot proceed without a working Ollama service for the selected cloud model.{Style.RESET_ALL}")
+            return 1
+        model_provider = ModelProvider.OLLAMA.value
+        print(
+            f"\nSelected {Fore.CYAN}Ollama Cloud{Style.RESET_ALL} model: {Fore.GREEN + Style.BRIGHT}{model_name}{Style.RESET_ALL}\n"
         )
     else:
         model_choice = questionary.select(
@@ -166,7 +200,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
 
 
 

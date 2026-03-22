@@ -1,10 +1,19 @@
 """Helper functions for LLM"""
 
 import json
+import os
+import random
+import threading
+import time
 from pydantic import BaseModel
 from src.llm.models import get_model, get_model_info
 from src.utils.progress import progress
 from src.graph.state import AgentState
+
+_DEFAULT_MAX_CONCURRENT_LLM_REQUESTS = 2
+_llm_request_semaphore = threading.BoundedSemaphore(
+    value=max(1, int(os.getenv("LLM_MAX_CONCURRENT_REQUESTS", _DEFAULT_MAX_CONCURRENT_LLM_REQUESTS)))
+)
 
 
 def call_llm(
@@ -58,20 +67,29 @@ def call_llm(
     # Call the LLM with retries
     for attempt in range(max_retries):
         try:
-            # Call the LLM
-            result = llm.invoke(prompt)
+            # Limit concurrent LLM calls across the process to avoid 429s from bursty graph execution.
+            with _llm_request_semaphore:
+                result = llm.invoke(prompt)
 
             # For non-JSON support models, we need to extract and parse the JSON manually
             if model_info and not model_info.has_json_mode():
                 parsed_result = extract_json_from_response(result.content)
                 if parsed_result:
                     return pydantic_model(**parsed_result)
+                raise ValueError("LLM returned content without a parseable JSON payload")
             else:
                 return result
 
         except Exception as e:
+            wait_seconds = _get_retry_delay_seconds(e, attempt)
             if agent_name:
-                progress.update_status(agent_name, None, f"Error - retry {attempt + 1}/{max_retries}")
+                retry_message = f"Error - retry {attempt + 1}/{max_retries}"
+                if wait_seconds > 0:
+                    retry_message = f"{retry_message} after {wait_seconds:.1f}s backoff"
+                progress.update_status(agent_name, None, retry_message)
+
+            if wait_seconds > 0 and attempt < max_retries - 1:
+                time.sleep(wait_seconds)
 
             if attempt == max_retries - 1:
                 print(f"Error in LLM call after {max_retries} attempts: {e}")
@@ -82,6 +100,20 @@ def call_llm(
 
     # This should never be reached due to the retry logic above
     return create_default_response(pydantic_model)
+
+
+def _get_retry_delay_seconds(error: Exception, attempt: int) -> float:
+    """Calculate a retry delay with longer backoff for rate-limit responses."""
+    error_text = str(error).lower()
+
+    if "429" in error_text or "too many concurrent requests" in error_text or "rate limit" in error_text:
+        base_delay = min(2 ** attempt, 8)
+        return base_delay + random.uniform(0.2, 0.8)
+
+    if attempt == 0:
+        return 0.5
+
+    return min(1.5 * attempt, 3.0)
 
 
 def create_default_response(model_class: type[BaseModel]) -> BaseModel:
@@ -107,8 +139,18 @@ def create_default_response(model_class: type[BaseModel]) -> BaseModel:
 
 
 def extract_json_from_response(content: str) -> dict | None:
-    """Extracts JSON from markdown-formatted response."""
+    """Extract JSON from raw JSON, fenced JSON, or text-wrapped JSON."""
+    if not isinstance(content, str) or not content.strip():
+        return None
+
     try:
+        stripped = content.strip()
+
+        # Best case: the model returned plain JSON directly.
+        if stripped.startswith("{") and stripped.endswith("}"):
+            return json.loads(stripped)
+
+        # Common case for weaker JSON models: fenced markdown JSON.
         json_start = content.find("```json")
         if json_start != -1:
             json_text = content[json_start + 7 :]  # Skip past ```json
@@ -116,6 +158,12 @@ def extract_json_from_response(content: str) -> dict | None:
             if json_end != -1:
                 json_text = json_text[:json_end].strip()
                 return json.loads(json_text)
+
+        # Fallback: recover the outermost JSON object from free-form text.
+        brace_start = content.find("{")
+        brace_end = content.rfind("}")
+        if brace_start != -1 and brace_end != -1 and brace_end > brace_start:
+            return json.loads(content[brace_start : brace_end + 1])
     except Exception as e:
         print(f"Error extracting JSON from response: {e}")
     return None

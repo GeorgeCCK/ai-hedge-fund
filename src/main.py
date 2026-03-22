@@ -20,6 +20,7 @@ import argparse
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import json
+from collections.abc import Mapping
 
 # Load environment variables from .env file
 load_dotenv()
@@ -28,10 +29,37 @@ init(autoreset=True)
 
 
 def parse_hedge_fund_response(response):
-    """Parses a JSON string and returns a dictionary."""
+    """Parses the portfolio manager response and returns a decisions dictionary."""
     try:
-        return json.loads(response)
+        if response is None:
+            return None
+
+        if isinstance(response, Mapping):
+            return _extract_decisions_payload(response)
+
+        if isinstance(response, list):
+            for item in response:
+                if isinstance(item, Mapping):
+                    extracted = _extract_decisions_payload(item)
+                    if extracted:
+                        return extracted
+                elif isinstance(item, str):
+                    extracted = parse_hedge_fund_response(item)
+                    if extracted:
+                        return extracted
+            print(f"Unable to parse list-based response: {repr(response)}")
+            return None
+
+        if not isinstance(response, str):
+            print(f"Invalid response type (expected string/dict/list, got {type(response).__name__})")
+            return None
+
+        parsed = json.loads(response)
+        return _extract_decisions_payload(parsed)
     except json.JSONDecodeError as e:
+        extracted = _extract_json_from_text(response) if isinstance(response, str) else None
+        if extracted:
+            return extracted
         print(f"JSON decoding error: {e}\nResponse: {repr(response)}")
         return None
     except TypeError as e:
@@ -40,6 +68,50 @@ def parse_hedge_fund_response(response):
     except Exception as e:
         print(f"Unexpected error while parsing response: {e}\nResponse: {repr(response)}")
         return None
+
+
+def _extract_json_from_text(response: str):
+    """Attempt to recover a JSON object embedded in free-form text."""
+    start = response.find("{")
+    end = response.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+
+    try:
+        parsed = json.loads(response[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+
+    return _extract_decisions_payload(parsed)
+
+
+def _extract_decisions_payload(payload):
+    """Normalize supported portfolio-manager payload shapes to a decisions dictionary."""
+    if not isinstance(payload, Mapping):
+        return None
+
+    decisions = payload.get("decisions")
+    if isinstance(decisions, Mapping):
+        return dict(decisions)
+
+    if _looks_like_decisions_mapping(payload):
+        return dict(payload)
+
+    return None
+
+
+def _looks_like_decisions_mapping(payload: Mapping) -> bool:
+    """Heuristic to detect {TICKER: {action, quantity, ...}} payloads."""
+    if not payload:
+        return False
+
+    required_fields = {"action", "quantity", "confidence"}
+    for value in payload.values():
+        if not isinstance(value, Mapping):
+            return False
+        if not required_fields.issubset(value.keys()):
+            return False
+    return True
 
 
 ##### Run the Hedge Fund #####

@@ -96,6 +96,7 @@ def load_models_from_json(json_path: str) -> List[LLMModel]:
 current_dir = Path(__file__).parent
 models_json_path = current_dir / "api_models.json"
 ollama_models_json_path = current_dir / "ollama_models.json"
+ollama_cloud_models_json_path = current_dir / "ollama_cloud_models.json"
 
 # Load available models from JSON
 AVAILABLE_MODELS = load_models_from_json(str(models_json_path))
@@ -103,22 +104,28 @@ AVAILABLE_MODELS = load_models_from_json(str(models_json_path))
 # Load Ollama models from JSON
 OLLAMA_MODELS = load_models_from_json(str(ollama_models_json_path))
 
+# Load Ollama cloud models from JSON
+OLLAMA_CLOUD_MODELS = load_models_from_json(str(ollama_cloud_models_json_path))
+
 # Create LLM_ORDER in the format expected by the UI
 LLM_ORDER = [model.to_choice_tuple() for model in AVAILABLE_MODELS]
 
 # Create Ollama LLM_ORDER separately
 OLLAMA_LLM_ORDER = [model.to_choice_tuple() for model in OLLAMA_MODELS]
 
+# Create Ollama cloud LLM_ORDER separately
+OLLAMA_CLOUD_LLM_ORDER = [model.to_choice_tuple() for model in OLLAMA_CLOUD_MODELS]
+
 
 def get_model_info(model_name: str, model_provider: str) -> LLMModel | None:
     """Get model information by model_name"""
-    all_models = AVAILABLE_MODELS + OLLAMA_MODELS
+    all_models = AVAILABLE_MODELS + OLLAMA_MODELS + OLLAMA_CLOUD_MODELS
     return next((model for model in all_models if model.model_name == model_name and model.provider == model_provider), None)
 
 
 def find_model_by_name(model_name: str) -> LLMModel | None:
     """Find a model by its name across all available models."""
-    all_models = AVAILABLE_MODELS + OLLAMA_MODELS
+    all_models = AVAILABLE_MODELS + OLLAMA_MODELS + OLLAMA_CLOUD_MODELS
     return next((model for model in all_models if model.model_name == model_name), None)
 
 

@@ -357,6 +357,35 @@ def ensure_ollama_and_model(model_name: str) -> bool:
     return True
 
 
+def ensure_ollama_server_for_cloud_model(model_name: str) -> bool:
+    """Ensure the Ollama service is available for cloud-backed models."""
+    ollama_url = _get_ollama_base_url()
+    env_override = os.environ.get("OLLAMA_BASE_URL")
+
+    if env_override or ollama_url.startswith("http://ollama:") or ollama_url.startswith("http://host.docker.internal:"):
+        if docker.is_ollama_available(ollama_url):
+            print(f"{Fore.GREEN}Ollama endpoint is available for cloud model {model_name}.{Style.RESET_ALL}")
+            return True
+        return False
+
+    if not is_ollama_installed():
+        print(f"{Fore.YELLOW}Ollama is not installed on your system.{Style.RESET_ALL}")
+        if questionary.confirm("Do you want to install Ollama?").ask():
+            return install_ollama()
+        print(f"{Fore.RED}Ollama is required to use Ollama cloud models.{Style.RESET_ALL}")
+        return False
+
+    if not is_ollama_server_running():
+        print(f"{Fore.YELLOW}Starting Ollama server...{Style.RESET_ALL}")
+        if not start_ollama_server():
+            return False
+
+    print(
+        f"{Fore.GREEN}Ollama server is ready. Cloud model requests for {model_name} will be delegated through your signed-in Ollama instance.{Style.RESET_ALL}"
+    )
+    return True
+
+
 def delete_model(model_name: str) -> bool:
     """Delete a locally downloaded Ollama model."""
     # Check if we're running in Docker
