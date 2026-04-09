@@ -1,0 +1,79 @@
+flowchart TD
+    A[Start] --> B{How analyst is selected?}
+
+    B --> C[CLI<br/>--analysts / --analysts-all / interactive checkbox]
+    B --> D[Frontend graph editor<br/>nodes and edges sent to backend]
+
+    C --> E[ANALYST_ORDER derived from ANALYST_CONFIG]
+    D --> F[Backend extracts base agent key from node ID]
+
+    E --> G{Selected analyst key}
+    F --> G
+
+    G --> H[news_sentiment_analyst<br/>maps to news_sentiment_agent]
+    G --> I[sentiment_analyst<br/>maps to sentiment_analyst_agent]
+
+    H --> J[create_workflow adds analyst node]
+    I --> J
+
+    J --> K[start_node connects to each analyst]
+    K --> L[Each analyst connects to risk manager]
+    L --> M[Then portfolio manager]
+
+    H --> N[Shared input state<br/>data.tickers<br/>data.end_date<br/>metadata.show_reasoning<br/>FINANCIAL_DATASETS_API_KEY]
+    I --> N
+
+    N --> O{Run which path?}
+    O --> P[Path A<br/>news_sentiment.py]
+    O --> Q[Path B<br/>sentiment.py]
+
+    subgraph A1 [Path A: news_sentiment.py]
+        P --> P1[For each ticker call get_company_news]
+        P1 --> P2[Take latest 10 news items]
+        P2 --> P3{News sentiment missing?}
+        P3 -->|Yes| P4[Pick up to 5 missing items]
+        P4 --> P5[Call LLM using title only]
+        P5 --> P6{LLM succeeds?}
+        P6 -->|Yes| P7[Return positive / negative / neutral and confidence]
+        P6 -->|No| P8[Fallback to neutral and confidence 0]
+        P3 -->|No| P9[Use provider sentiment directly]
+        P7 --> P10[Map positive to bullish<br/>negative to bearish<br/>else neutral]
+        P8 --> P10
+        P9 --> P10
+        P10 --> P11[Count bullish / bearish / neutral news]
+        P11 --> P12{Majority result}
+        P12 -->|bullish > bearish| P13[Final signal = bullish]
+        P12 -->|bearish > bullish| P14[Final signal = bearish]
+        P12 -->|equal| P15[Final signal = neutral]
+        P13 --> P16[Compute confidence<br/>LLM-weighted mix if LLM used<br/>otherwise proportion only]
+        P14 --> P16
+        P15 --> P16
+        P16 --> P17[Reasoning includes news_sentiment block]
+    end
+
+    subgraph B1 [Path B: sentiment.py]
+        Q --> Q1[For each ticker call get_insider_trades]
+        Q1 --> Q2[Map transaction_shares<br/>< 0 to bearish<br/>>= 0 to bullish]
+        Q2 --> Q3[Call get_company_news]
+        Q3 --> Q4[Use provider news.sentiment only]
+        Q4 --> Q5[Map positive to bullish<br/>negative to bearish<br/>else neutral]
+        Q5 --> Q6[Drop news without valid sentiment]
+        Q6 --> Q7[Count insider signals]
+        Q7 --> Q8[Count news signals]
+        Q8 --> Q9[Apply fixed weights<br/>insider 0.3<br/>news 0.7]
+        Q9 --> Q10{Weighted bullish vs bearish}
+        Q10 -->|bullish higher| Q11[Final signal = bullish]
+        Q10 -->|bearish higher| Q12[Final signal = bearish]
+        Q10 -->|tie or none| Q13[Final signal = neutral]
+        Q11 --> Q14[Confidence = dominant weighted signals / total weighted signals * 100]
+        Q12 --> Q14
+        Q13 --> Q14
+        Q14 --> Q15[Reasoning includes insider_trading<br/>news_sentiment<br/>combined_analysis]
+    end
+
+    P17 --> R[Write result to state.data.analyst_signals[agent_id]]
+    Q15 --> R
+    R --> S[Return HumanMessage]
+
+    P --> T[Key difference:<br/>can recover missing news sentiment with LLM]
+    Q --> U[Key difference:<br/>combines insider trades and news with fixed weights]
